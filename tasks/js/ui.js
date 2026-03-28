@@ -21,7 +21,7 @@ window.UI = {
         <h1 class="view-title">Brain Dump</h1>
         <p class="view-subtitle">할 일을 자유롭게 입력하세요</p>
       </div>
-      <textarea class="dump-textarea" id="dumpInput" placeholder="내일 캐스팅앱 버그 고치고, 은행 서류 제출하고, 유튜브 스크립트 쓰고, 투자자한테 이메일 보내야 됨..."></textarea>
+      <textarea class="dump-textarea" id="dumpInput" placeholder="할 일을 자유롭게 입력하세요... 예: 내일 캐스팅앱 버그 고치고, 은행 서류 제출하고, 이메일 보내야 됨"></textarea>
       <button class="btn btn-primary" id="dumpSubmit">정리하기</button>
       <div id="dumpResults"></div>
     `;
@@ -157,9 +157,9 @@ window.UI = {
 
     let html = `
       <div class="date-nav">
-        <button class="date-nav-btn" onclick="App.prevDay()">◀</button>
+        <button class="date-nav-btn" id="todayPrevBtn">◀</button>
         <span class="date-nav-text">${App.formatDate(date)}</span>
-        <button class="date-nav-btn" onclick="App.nextDay()">▶</button>
+        <button class="date-nav-btn" id="todayNextBtn">▶</button>
       </div>
       <div class="progress-container">
         <div class="progress-label">
@@ -173,7 +173,7 @@ window.UI = {
     if (tasks.length === 0) {
       html += `<div class="empty-state">
         <div class="empty-state-icon">📝</div>
-        <p class="empty-state-text">할 일이 없습니다.<br>Brain Dump에서 추가해보세요!</p>
+        <p class="empty-state-text">오늘 할 일이 없습니다. Brain Dump에서 추가해보세요!</p>
       </div>`;
     } else {
       // Group by project
@@ -219,6 +219,9 @@ window.UI = {
     }
 
     app.innerHTML = html;
+
+    document.getElementById('todayPrevBtn')?.addEventListener('click', () => App.prevDay());
+    document.getElementById('todayNextBtn')?.addEventListener('click', () => App.nextDay());
 
     // Event delegation
     app.addEventListener('click', (e) => {
@@ -404,7 +407,7 @@ window.UI = {
     const tasks = Store.getTasksByProject(projectId);
 
     let html = `
-      <button class="back-btn" onclick="UI.renderProjectsView()">← 프로젝트 목록</button>
+      <button class="back-btn" id="projectDetailBackBtn">← 프로젝트 목록</button>
       <div class="view-header">
         <h1 class="view-title" style="color:${project.color}">${this._esc(project.name)}</h1>
         <p class="view-subtitle">${this._esc(project.roadmap?.goal || '')}</p>
@@ -444,16 +447,24 @@ window.UI = {
 
     app.innerHTML = html;
 
+    document.getElementById('projectDetailBackBtn').addEventListener('click', () => {
+      this.renderProjectsView();
+    });
+
     document.getElementById('buildRoadmapBtn').addEventListener('click', () => {
       this._startRoadmapChat(projectId, project.name);
     });
 
     document.getElementById('deleteProjectBtn').addEventListener('click', () => {
-      if (confirm(`"${project.name}" 프로젝트를 삭제할까요?`)) {
-        Store.deleteProject(projectId);
-        App.showToast('프로젝트 삭제됨');
-        this.renderProjectsView();
-      }
+      this._showConfirmModal(
+        `"${project.name}" 프로젝트 삭제`,
+        '프로젝트와 관련 태스크가 모두 삭제됩니다. 계속하시겠습니까?',
+        () => {
+          Store.deleteProject(projectId);
+          App.showToast('프로젝트 삭제됨');
+          this.renderProjectsView();
+        }
+      );
     });
   },
 
@@ -472,7 +483,7 @@ window.UI = {
   _renderRoadmapChat() {
     const app = this.getApp();
     let html = `
-      <button class="back-btn" onclick="UI._renderProjectDetail('${this._chatProjectId}')">← ${this._esc(this._chatProjectName)}</button>
+      <button class="back-btn" id="roadmapChatBackBtn">← ${this._esc(this._chatProjectName)}</button>
       <div class="view-header">
         <h1 class="view-title">로드맵 만들기</h1>
         <p class="view-subtitle">AI와 대화하며 로드맵을 설계하세요</p>
@@ -503,6 +514,9 @@ window.UI = {
       this._sendRoadmapChat(text, false);
     };
 
+    document.getElementById('roadmapChatBackBtn').addEventListener('click', () => {
+      this._renderProjectDetail(this._chatProjectId);
+    });
     document.getElementById('chatSendBtn').addEventListener('click', sendMsg);
     document.getElementById('chatInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') sendMsg();
@@ -523,7 +537,11 @@ window.UI = {
     if (loading) loading.style.display = 'flex';
 
     try {
-      const result = await AI.chatForRoadmap(this._chatProjectName, this._chatMessages, isInit);
+      // AI.chatForRoadmap(projectName, messages) - isInit handled by sending an empty-message greeting prompt
+      const messagesForApi = isInit
+        ? [{ role: 'user', text: `프로젝트 "${this._chatProjectName}"의 로드맵 작성을 시작해주세요. 첫 질문을 해주세요.` }]
+        : this._chatMessages;
+      const result = await AI.chatForRoadmap(this._chatProjectName, messagesForApi);
       this._chatMessages.push({ role: 'model', text: result.reply });
 
       const container = document.getElementById('chatContainer');
@@ -642,18 +660,45 @@ window.UI = {
 
     // Delete all
     document.getElementById('deleteAllBtn').addEventListener('click', () => {
-      if (confirm('정말 모든 데이터를 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) {
-        localStorage.removeItem('taskmanager_data');
-        Store.init();
-        App.showToast('모든 데이터가 삭제되었습니다');
-        this.renderSettingsView();
-      }
+      this._showConfirmModal(
+        '모든 데이터 삭제',
+        '정말 모든 데이터를 삭제할까요? 이 작업은 되돌릴 수 없습니다.',
+        () => {
+          localStorage.removeItem('taskmanager_data');
+          Store.init();
+          App.showToast('모든 데이터가 삭제되었습니다');
+          this.renderSettingsView();
+        }
+      );
     });
   },
 
   // ============================
   // Helpers
   // ============================
+  _showConfirmModal(title, message, onConfirm) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="modal-title">${this._esc(title)}</div>
+        <div class="modal-body">${this._esc(message)}</div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" id="confirmModalCancel">취소</button>
+          <button class="btn btn-danger" id="confirmModalOk">삭제</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#confirmModalCancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#confirmModalOk').addEventListener('click', () => {
+      overlay.remove();
+      onConfirm();
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  },
+
   _esc(str) {
     if (!str) return '';
     const div = document.createElement('div');
